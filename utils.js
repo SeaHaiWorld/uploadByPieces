@@ -1,24 +1,22 @@
 import { largeFileInit, largeFilePartUpload, uploadSingle } from '@/api/index'
 
-/**
-* 分片上传函数 支持多个文件
-* @param options
-* options.file 表示源文件
-* progress 进度回调
-*/
 
-// 文件类型，1为图片，不进行分片，2为视频
+
+// 文件类型，1默认不分片，2为视频
 const FILE_TYPE = {
-  IMAGE: 1,
-  VIDEO: 2
+  DEFAULT: 1,
+  LARGE_FILE: 2
 }
 
 // 分片大小：5m
 const pieceSize = 5 * 1024 * 1000
 
 /**
- * 分片上传主函数
- */
+* 分片上传函数 支持多个文件 支持失败重传 支持同步进度百分比
+* @param options
+* options.files 表示文件对象
+* options.progress 进度回调
+*/
 export const uploadByPieces = async({ files, progress }) => {
   if (!files || !files.length) return
   // 上传过程中用到的变量
@@ -27,10 +25,11 @@ export const uploadByPieces = async({ files, progress }) => {
   files.map((file, index) => {
     fileList.push({
       file, // 文件对象
-      finishCount: 0, // 完成分片个数
-      md5: file.uid, // 文件唯一标识 uid or md5
       name: file.name, // 文件名
-      type: /image/.test(file.type) ? FILE_TYPE.IMAGE : FILE_TYPE.VIDEO // 文件类型
+      md5: file.uid, // 文件唯一标识 uid or md5
+      finishCount: 0, // 完成个数
+      chunkCount: null, // 总片数
+      type: /video/.test(file.type) ? FILE_TYPE.LARGE_FILE : FILE_TYPE.DEFAULT // 文件类型，默认是 video 需要分片
     })
   })
   if (fileList && fileIndex <= fileList.length - 1) {
@@ -38,16 +37,16 @@ export const uploadByPieces = async({ files, progress }) => {
   }
 }
 
-/** 针对每个文件进行处理
-* @param options
-* currentFile 表示源文件
-* fileIndex 文件索引
-* fileList 文件列表
-* progress 进度回调
+/** 
+* 单个文件处理函数
+* @param currentFile 表示源文件
+* @param fileIndex 文件索引
+* @param fileList 文件列表
+* @param progress 进度回调
 */
 async function dealFile(currentFile, fileIndex, fileList, progress) {
   // console.log('文件索引', fileIndex, currentFile)
-  // 文件队列临界条件
+  // 递归结束条件
   if (fileIndex > fileList.length - 1 || !fileList) {
     // console.log('reject')
     return 'reject'
@@ -57,14 +56,14 @@ async function dealFile(currentFile, fileIndex, fileList, progress) {
   currentFile.chunkCount = Math.ceil(fileSize / pieceSize)// 总片数
   const fileForm = new FormData()
   fileForm.append('uuid', currentFile.md5)
-  if (currentFile.type === FILE_TYPE.VIDEO) {
-    await largeFileInit(fileForm)
-    await dealChunk(currentFile, chunkIndex, progress, fileIndex)
-  } else {
+  if (currentFile.type === FILE_TYPE.LARGE_FILE) {
+    await largeFileInit(fileForm) // 大文件上传初始化函数
+    await dealChunk(currentFile, chunkIndex, progress, fileIndex) // 分片处理函数
+  } else if (currentFile.type === FILE_TYPE.DEFAULT){
     const formData = new FormData()
     formData.append('file', currentFile.file)
     formData.append('scene', 'feed')
-    formData.append('mediaType', 'image')
+    formData.append('fileType', 'DEFAULT')
     const res = await uploadSingle(formData)
     if (res.data) {
       currentFile.finishCount++
@@ -73,23 +72,23 @@ async function dealFile(currentFile, fileIndex, fileList, progress) {
     }
   }
   fileIndex++
+  // 递归结束条件
   if (fileIndex > fileList.length - 1 || !fileList) {
     console.log('reject')
     return 'reject'
   }
+  // 递归
   if (fileIndex <= fileList.length - 1) {
     return await dealFile(fileList[fileIndex], fileIndex, fileList, progress)
   }
-
-  // console.log(res, fileIndex)
 }
 
-/** 针对每个文件的分片进行的处理
-* @param options
-* currentFile 表示源文件
-* chunkIndex 分片索引
-* progress 进度回调
-* fileIndex 文件索引
+/** 
+* 针对每个文件的分片进行的处理的函数
+* @param currentFile 表示源文件
+* @param chunkIndex 分片索引
+* @param progress 进度回调
+* @param fileIndex 文件索引
 */
 async function dealChunk(currentFile, chunkIndex, progress, fileIndex) {
   // console.log('文件名', currentFile.file.name, '分片', chunkIndex, '总数', currentFile.chunkCount)
@@ -113,12 +112,13 @@ async function dealChunk(currentFile, chunkIndex, progress, fileIndex) {
   return await dealChunk(currentFile, chunkIndex, progress, fileIndex)
 }
 
-/** 针对每个分片进行的上传
+/** 
+* 针对每个分片进行的上传
 * @param options
-* progress 进度回调
-* currentFile 表示源文件
-* fileIndex 文件索引
-* chunkIndex 分片索引
+* @param progress 进度回调
+* @param currentFile 表示源文件
+* @param fileIndex 文件索引
+* @param chunkIndex 分片索引
 */
 function uploadChunk(fetchForm, progress, currentFile, fileIndex) {
   if (currentFile && currentFile.finishCount >= currentFile.chunkCount) {
