@@ -1,8 +1,8 @@
 import { largeFileInit, largeFilePartUpload, uploadSingle } from '@/api/index'
+import md5 from 'js-md5'
 
 
-
-// 文件类型，1默认不分片，2为视频
+// 文件类型，1默认不分片，2为大文件，分片上传
 const FILE_TYPE = {
   DEFAULT: 1,
   LARGE_FILE: 2
@@ -26,7 +26,7 @@ export const uploadByPieces = async({ files, progress }) => {
     fileList.push({
       file, // 文件对象
       name: file.name, // 文件名
-      md5: file.uid, // 文件唯一标识 uid or md5
+      md5: md5(file), // 文件唯一标识 uid or md5
       finishCount: 0, // 完成个数
       chunkCount: null, // 总片数
       type: /video/.test(file.type) ? FILE_TYPE.LARGE_FILE : FILE_TYPE.DEFAULT // 文件类型，默认是 video 需要分片
@@ -55,14 +55,14 @@ async function dealFile(currentFile, fileIndex, fileList, progress) {
   const fileSize = currentFile.file.size // 文件大小
   currentFile.chunkCount = Math.ceil(fileSize / pieceSize)// 总片数
   const fileForm = new FormData()
-  fileForm.append('uuid', currentFile.md5)
+  fileForm.append('md5', currentFile.md5)
   if (currentFile.type === FILE_TYPE.LARGE_FILE) {
     await largeFileInit(fileForm) // 大文件上传初始化函数
     await dealChunk(currentFile, chunkIndex, progress, fileIndex) // 分片处理函数
   } else if (currentFile.type === FILE_TYPE.DEFAULT){
     const formData = new FormData()
     formData.append('file', currentFile.file)
-    formData.append('scene', 'feed')
+    formData.append('md5', currentFile.md5)
     formData.append('fileType', 'DEFAULT')
     const res = await uploadSingle(formData)
     if (res.data) {
@@ -100,8 +100,9 @@ async function dealChunk(currentFile, chunkIndex, progress, fileIndex) {
   const end = Math.min(currentFile.file.size, start + pieceSize)
   const chunk = currentFile.file.slice(start, end)
   const fetchForm = new FormData()
-  fetchForm.append('uuid', currentFile.md5)
-  fetchForm.append('file', chunk)
+  fetchForm.append('chunk', chunk)
+  fetchForm.append('chunkMd5', md5(chunk))
+  fetchForm.append('md5', currentFile.md5)
   fetchForm.append('index', chunkIndex)
   await uploadChunk(fetchForm, progress, currentFile, fileIndex)
   chunkIndex++
